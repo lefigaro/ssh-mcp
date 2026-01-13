@@ -93,6 +93,9 @@ const MAX_CHARS = (() => {
   return 1000;
 })();
 
+// Idle timeout configuration (default: 30 minutes)
+const IDLE_TIMEOUT = argvConfig.idleTimeout ? parseInt(argvConfig.idleTimeout) * 60000 : 30 * 60000;
+
 // Default IAP local port
 const DEFAULT_IAP_LOCAL_PORT = 2222;
 
@@ -103,6 +106,7 @@ function validateConfig(config: Record<string, string | null>) {
   if (config.timeout && isNaN(Number(config.timeout))) errors.push('Invalid --timeout');
   if (config.maxChars && config.maxChars !== 'none' && isNaN(Number(config.maxChars))) errors.push('Invalid --maxChars');
   if (config.port && isNaN(Number(config.port))) errors.push('Invalid --port');
+  if (config.idleTimeout && isNaN(Number(config.idleTimeout))) errors.push('Invalid --idleTimeout');
 
   // Validate static mode configuration (if connection params provided)
   const isStaticMode = !!(config.host || config.iapInstance);
@@ -202,6 +206,26 @@ export interface ConnectionParams {
 // Connection Pool for managing multiple dynamic connections
 export class ConnectionPool {
   private connections: Map<string, SSHConnectionManager> = new Map();
+  private cleanupInterval: NodeJS.Timeout;
+
+  constructor() {
+    // Check for idle connections every minute
+    this.cleanupInterval = setInterval(() => this.cleanup(), 60000);
+  }
+
+  /**
+   * Close idle connections
+   */
+  private cleanup(): void {
+    const now = Date.now();
+    for (const [key, manager] of this.connections.entries()) {
+      if (manager.activeRequests === 0 && (now - manager.lastAccessed > IDLE_TIMEOUT)) {
+        console.error(`Closing idle connection: ${key}`);
+        manager.close();
+        this.connections.delete(key);
+      }
+    }
+  }
 
   /**
    * Generate a unique key for a connection based on parameters
@@ -307,6 +331,7 @@ export class ConnectionPool {
       this.connections.set(key, manager);
     }
 
+    manager.touch();
     return manager;
   }
 
@@ -314,6 +339,7 @@ export class ConnectionPool {
    * Close all connections
    */
   closeAll(): void {
+    clearInterval(this.cleanupInterval);
     for (const manager of this.connections.values()) {
       manager.close();
     }
@@ -338,11 +364,17 @@ export class SSHConnectionManager {
   private isElevated = false;  // Track if we're in su mode
   private originalHost: string;
   private originalPort: number;
+  public lastAccessed: number = Date.now();
+  public activeRequests: number = 0;
 
   constructor(config: SSHConfig) {
     this.sshConfig = config;
     this.originalHost = config.host;
     this.originalPort = config.port;
+  }
+
+  touch(): void {
+    this.lastAccessed = Date.now();
   }
 
   async connect(): Promise<void> {
@@ -878,20 +910,24 @@ export async function execViaGcloudSSH(
 
 // New function that uses persistent connection
 export async function execSshCommandWithConnection(manager: SSHConnectionManager, command: string, stdin?: string): Promise<{ [x: string]: unknown; content: ({ [x: string]: unknown; type: "text"; text: string; } | { [x: string]: unknown; type: "image"; data: string; mimeType: string; } | { [x: string]: unknown; type: "audio"; data: string; mimeType: string; } | { [x: string]: unknown; type: "resource"; resource: any; })[] }> {
-  // Check if this is IAP mode - if so, use gcloud ssh directly
-  const iapConfig = (manager as any).sshConfig?.iap;
-  if (iapConfig && iapConfig.enabled) {
-    return execViaGcloudSSH(
-      iapConfig.instanceName,
-      iapConfig.project,
-      iapConfig.zone,
-      (manager as any).sshConfig.username,
-      command
-    );
-  }
+  manager.activeRequests++;
+  manager.touch();
 
-  // Otherwise use standard SSH connection
-  return new Promise((resolve, reject) => {
+  try {
+    // Check if this is IAP mode - if so, use gcloud ssh directly
+    const iapConfig = (manager as any).sshConfig?.iap;
+    if (iapConfig && iapConfig.enabled) {
+      return await execViaGcloudSSH(
+        iapConfig.instanceName,
+        iapConfig.project,
+        iapConfig.zone,
+        (manager as any).sshConfig.username,
+        command
+      );
+    }
+
+    // Otherwise use standard SSH connection
+    return await new Promise((resolve, reject) => {
     let timeoutId: NodeJS.Timeout;
     let isResolved = false;
 
@@ -993,6 +1029,10 @@ export async function execSshCommandWithConnection(manager: SSHConnectionManager
       });
     });
   });
+  } finally {
+    manager.activeRequests--;
+    manager.touch();
+  }
 }
 
 // Keep the old function for backward compatibility (used in tests)

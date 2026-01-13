@@ -200,6 +200,9 @@ In **HTTP/SSE mode**, the server runs as a web service using Express, allowing M
 node build/index.js --port=3000
 ```
 
+**Security Note:**
+The HTTP/SSE mode does not implement authentication by default. It is strongly recommended to run this server behind a secure reverse proxy (like Apisix, Nginx, or Traefik) that handles authentication and authorization, or use it only within a secure private network.
+
 **Endpoints:**
 - `GET /sse`: SSE endpoint for establishing the MCP connection
 - `POST /message`: Endpoint for sending JSON-RPC messages from the client
@@ -224,7 +227,7 @@ To connect a client like Claude Desktop or another MCP client to the HTTP endpoi
 **Docker Example:**
 
 ```bash
-docker run -p 3000:3000 -v ~/.ssh:/root/.ssh -v ~/.config/gcloud:/root/.config/gcloud ssh-mcp --port=3000
+docker run -p 3000:3000 -v ~/.ssh:/home/sshmcp/.ssh -v ~/.config/gcloud:/home/sshmcp/.config/gcloud ssh-mcp --port=3000
 ```
 
 **Verify Installation:**
