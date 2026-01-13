@@ -171,6 +171,7 @@ export interface SSHConfig {
   username: string;
   password?: string;
   privateKey?: string;
+  privateKeyPath?: string;
   suPassword?: string;
   sudoPassword?: string;  // Password for sudo commands specifically (if different from suPassword)
   // Google IAP tunnel configuration (optional)
@@ -271,6 +272,7 @@ export class ConnectionPool {
       } else if (params.privateKeyPath) {
         const fs = await import('fs/promises');
         config.privateKey = await fs.readFile(params.privateKeyPath, 'utf8');
+        config.privateKeyPath = params.privateKeyPath;
       }
 
       if (params.sudoPassword) {
@@ -297,6 +299,7 @@ export class ConnectionPool {
       } else if (params.privateKeyPath) {
         const fs = await import('fs/promises');
         config.privateKey = await fs.readFile(params.privateKeyPath, 'utf8');
+        config.privateKeyPath = params.privateKeyPath;
       }
 
       if (params.sudoPassword) {
@@ -838,7 +841,8 @@ export async function execViaGcloudSSH(
   project: string,
   zone: string | undefined,
   user: string,
-  command: string
+  command: string,
+  keyPath?: string
 ): Promise<{ [x: string]: unknown; content: ({ [x: string]: unknown; type: "text"; text: string; } | { [x: string]: unknown; type: "image"; data: string; mimeType: string; } | { [x: string]: unknown; type: "audio"; data: string; mimeType: string; } | { [x: string]: unknown; type: "resource"; resource: any; })[] }> {
   return new Promise(async (resolve, reject) => {
     // Auto-detect zone if not provided
@@ -861,6 +865,10 @@ export async function execViaGcloudSSH(
       `--zone=${effectiveZone}`,
       `--command=${command}`
     ];
+
+    if (keyPath) {
+      args.push(`--ssh-key-file=${keyPath}`);
+    }
 
     const gcloudProcess = spawn('gcloud', args, {
       stdio: ['ignore', 'pipe', 'pipe']
@@ -922,7 +930,8 @@ export async function execSshCommandWithConnection(manager: SSHConnectionManager
         iapConfig.project,
         iapConfig.zone,
         (manager as any).sshConfig.username,
-        command
+        command,
+        (manager as any).sshConfig.privateKeyPath
       );
     }
 
